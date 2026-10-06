@@ -1,0 +1,24 @@
+AI Ultrasound Assistant - Research & Educational License
+
+This software is provided "AS-IS" for research and educational purposes only.
+
+DISCLAIMER:
+This software is NOT approved for clinical use and is NOT a medical device.
+It should NOT be used for clinical diagnosis without proper medical oversight.
+All ultrasound images must be interpreted by licensed medical professionals.
+
+RESTRICTIONS:
+- For research and training use only
+- Do not use commercially without permission
+- Do not modify for clinical deployment
+- Include this license in all distributions
+- Attribute original source in publications
+
+WARRANTY:
+This software is provided without warranty of any kind, express or implied.
+The authors are not liable for any claims, damages, or other liability.
+
+ATTRIBUTION:
+If using this software in research, please cite:
+"AI Ultrasound Assistant V1.0" (2025)
+
