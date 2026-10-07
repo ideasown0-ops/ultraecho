@@ -1,0 +1,29 @@
+﻿# Python
+__pycache__/
+*.py[cod]
+*.class
+
+# Runtime
+logs/
+data/
+
+# Local database / runtime data
+ultrasound.db
+*.db
+
+# Backups
+*_before_*.py
+*_before_*.db
+
+# Temporary files
+*.tmp
+*.bak
+*.log
+
+# Local IDE / OS
+.vscode/
+.idea/
+*.user
+*.suo
+Thumbs.db
+.DS_Store

@@ -141,6 +141,18 @@ class DatabaseManager:
             )
         ''')
         
+        # Examination media table
+        cursor.execute(
+            "CREATE TABLE IF NOT EXISTS examination_media ("
+            "media_id TEXT PRIMARY KEY,"
+            "exam_id TEXT NOT NULL,"
+            "media_type TEXT NOT NULL,"
+            "file_path TEXT NOT NULL,"
+            "created_at TEXT NOT NULL,"
+            "FOREIGN KEY (exam_id) REFERENCES examinations (exam_id)"
+            ")"
+        )
+
         # AI Analysis history table
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS ai_analysis_history (
@@ -423,6 +435,83 @@ class DatabaseManager:
             logger.error(f"Failed to get statistics: {e}")
             return {}
     
+    def add_examination_media(
+        self,
+        media_id: str,
+        exam_id: str,
+        media_type: str,
+        file_path: str
+    ) -> bool:
+        """Register a media file belonging to an examination."""
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                "INSERT INTO examination_media "
+                "(media_id, exam_id, media_type, file_path, created_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (
+                    media_id,
+                    exam_id,
+                    media_type,
+                    file_path,
+                    datetime.now().isoformat()
+                )
+            )
+            conn.commit()
+            return True
+        except Exception as e:
+            logger.error(f"Error adding examination media: {e}")
+            return False
+
+    def get_examination_media(
+        self,
+        exam_id: str,
+        media_type: str = None
+    ):
+        """Return media files belonging to an examination."""
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+
+            if media_type:
+                cursor.execute(
+                    "SELECT media_id, exam_id, media_type, file_path, "
+                    "created_at "
+                    "FROM examination_media "
+                    "WHERE exam_id = ? AND media_type = ? "
+                    "ORDER BY created_at DESC",
+                    (exam_id, media_type)
+                )
+            else:
+                cursor.execute(
+                    "SELECT media_id, exam_id, media_type, file_path, "
+                    "created_at "
+                    "FROM examination_media "
+                    "WHERE exam_id = ? "
+                    "ORDER BY created_at DESC",
+                    (exam_id,)
+                )
+
+            return [dict(row) for row in cursor.fetchall()]
+        except Exception as e:
+            logger.error(f"Error getting examination media: {e}")
+            return []
+
+    def get_all_examinations(self):
+        """Return all examinations ordered by newest first."""
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT * FROM examinations "
+                "ORDER BY exam_date DESC"
+            )
+            return cursor.fetchall()
+        except Exception as e:
+            logger.error(f"Error getting all examinations: {e}")
+            return []
+
     def close(self):
         """Close database connection"""
         if self.connection:

@@ -5,8 +5,10 @@ Enhanced UI with AI Analysis, Database, and Advanced Features
 
 import logging
 import os
+import shutil
 from datetime import datetime
 import uuid
+from pathlib import Path
 
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
@@ -275,6 +277,9 @@ class MainWindowV1(QMainWindow):
         self.current_patient = None
         self.current_exam = None
         self.current_frame_id = 0
+        self.current_video_path = None
+        self.project_data_dir = Path("data")
+        self.project_data_dir.mkdir(parents=True, exist_ok=True)
         self.is_capturing = False
 
         # Status bar
@@ -543,30 +548,27 @@ class MainWindowV1(QMainWindow):
         return widget
 
     def create_patient_tab(self) -> QWidget:
-        """Create patient management tab."""
+        """Create patient and study management tab."""
 
         widget = QWidget()
         layout = QVBoxLayout()
 
+        # ----------------------------------------------------
+        # Patient controls
+        # ----------------------------------------------------
         btn_layout = QHBoxLayout()
 
         new_patient_btn = QPushButton("New Patient")
-        new_patient_btn.clicked.connect(
-            self.new_patient
-        )
+        new_patient_btn.clicked.connect(self.new_patient)
+        btn_layout.addWidget(new_patient_btn)
 
-        btn_layout.addWidget(
-            new_patient_btn
-        )
+        new_exam_btn = QPushButton("New Study")
+        new_exam_btn.clicked.connect(self.new_examination)
+        btn_layout.addWidget(new_exam_btn)
 
-        new_exam_btn = QPushButton("New Examination")
-        new_exam_btn.clicked.connect(
-            self.new_examination
-        )
-
-        btn_layout.addWidget(
-            new_exam_btn
-        )
+        refresh_btn = QPushButton("Refresh")
+        refresh_btn.clicked.connect(self.refresh_patients_list)
+        btn_layout.addWidget(refresh_btn)
 
         layout.addLayout(btn_layout)
 
@@ -574,23 +576,80 @@ class MainWindowV1(QMainWindow):
 
         self.patients_table = QTableWidget()
         self.patients_table.setColumnCount(4)
-
         self.patients_table.setHorizontalHeaderLabels([
             "ID",
             "Name",
             "Age",
             "Contact"
         ])
-
-        layout.addWidget(
-            self.patients_table
+        self.patients_table.setSelectionBehavior(
+            QTableWidget.SelectRows
+        )
+        self.patients_table.setSelectionMode(
+            QTableWidget.SingleSelection
+        )
+        self.patients_table.itemSelectionChanged.connect(
+            self.patient_selection_changed
         )
 
-        self.refresh_patients_list()
+        layout.addWidget(self.patients_table)
 
-        layout.addStretch()
+        # ----------------------------------------------------
+        # Current study
+        # ----------------------------------------------------
+        layout.addWidget(QLabel("Current Study:"))
+
+        self.current_study_label = QLabel(
+            "No study selected"
+        )
+        self.current_study_label.setWordWrap(True)
+        layout.addWidget(self.current_study_label)
+
+        # ----------------------------------------------------
+        # Study history
+        # ----------------------------------------------------
+        layout.addWidget(QLabel("Study History:"))
+
+        self.study_history_table = QTableWidget()
+        self.study_history_table.setColumnCount(5)
+        self.study_history_table.setHorizontalHeaderLabels([
+            "Study ID",
+            "Date",
+            "Type",
+            "Status",
+            "Indication"
+        ])
+        self.study_history_table.setSelectionBehavior(
+            QTableWidget.SelectRows
+        )
+        self.study_history_table.setSelectionMode(
+            QTableWidget.SingleSelection
+        )
+        self.study_history_table.itemSelectionChanged.connect(
+            self.study_selection_changed
+        )
+
+        layout.addWidget(self.study_history_table)
+
+        history_btn_layout = QHBoxLayout()
+
+        open_study_btn = QPushButton("Open Selected Study")
+        open_study_btn.clicked.connect(
+            self.open_selected_study
+        )
+        history_btn_layout.addWidget(open_study_btn)
+
+        save_video_btn = QPushButton("Save Video to Study")
+        save_video_btn.clicked.connect(
+            self.save_current_video_to_study
+        )
+        history_btn_layout.addWidget(save_video_btn)
+
+        layout.addLayout(history_btn_layout)
 
         widget.setLayout(layout)
+
+        self.refresh_patients_list()
 
         return widget
 
@@ -868,14 +927,24 @@ class MainWindowV1(QMainWindow):
             "%Y%m%d_%H%M%S"
         )
 
-        frame_path = (
-            f"captures/{timestamp}_{frame_id}.jpg"
-        )
+        study_root = self._study_root()
 
-        os.makedirs(
-            "captures",
-            exist_ok=True
-        )
+        if study_root is not None:
+            image_file = (
+                study_root
+                / "images"
+                / f"{timestamp}_{frame_id}.jpg"
+            )
+            frame_path = str(image_file)
+        else:
+            frame_path = (
+                f"captures/{timestamp}_{frame_id}.jpg"
+            )
+
+            os.makedirs(
+                "captures",
+                exist_ok=True
+            )
 
         cv2.imwrite(
             frame_path,
@@ -927,6 +996,300 @@ class MainWindowV1(QMainWindow):
             f"Frame captured: {frame_id}"
         )
 
+    def patient_selection_changed(self):
+        """Handle patient selection from the patients table."""
+        try:
+            row = self.patients_table.currentRow()
+
+            if row < 0:
+                return
+
+            item = self.patients_table.item(row, 0)
+
+            if item is None:
+                return
+
+            patient_id = item.text().strip()
+
+            if not patient_id:
+                return
+
+            patient = self.db_manager.get_patient(patient_id)
+
+            if patient is None:
+                return
+
+            self.current_patient = patient.patient_id
+            self.current_exam = None
+
+            self.current_study_label.setText(
+                f"Patient: {patient.name} "
+                f"({patient.patient_id})\n"
+                "No study selected"
+            )
+
+            self.refresh_study_history()
+
+            self.update_status(
+                f"Patient selected: {patient.name}"
+            )
+
+        except Exception as e:
+            logger.exception(
+                f"Error selecting patient: {e}"
+            )
+
+    def refresh_study_history(self):
+        """Refresh studies belonging to the current patient."""
+
+        if not hasattr(self, "study_history_table"):
+            return
+
+        self.study_history_table.setRowCount(0)
+
+        if not self.current_patient:
+            return
+
+        exams = self.db_manager.get_patient_examinations(
+            self.current_patient
+        )
+
+        for i, exam in enumerate(exams):
+            self.study_history_table.insertRow(i)
+
+            values = [
+                exam.exam_id,
+                exam.exam_date,
+                exam.exam_type,
+                exam.status,
+                exam.indication
+            ]
+
+            for col, value in enumerate(values):
+                self.study_history_table.setItem(
+                    i,
+                    col,
+                    QTableWidgetItem(str(value or ""))
+                )
+
+    def study_selection_changed(self):
+        """Handle study selection."""
+        try:
+            row = self.study_history_table.currentRow()
+
+            if row < 0:
+                return
+
+            item = self.study_history_table.item(row, 0)
+
+            if item is None:
+                return
+
+            self.current_exam = item.text().strip()
+
+            if self.current_exam:
+                self.current_study_label.setText(
+                    f"Patient: {self.current_patient}\n"
+                    f"Study: {self.current_exam}"
+                )
+
+                self.update_status(
+                    f"Study selected: {self.current_exam}"
+                )
+
+        except Exception as e:
+            logger.exception(
+                f"Error selecting study: {e}"
+            )
+
+    def open_selected_study(self):
+        """Open the selected study as the current study."""
+        self.study_selection_changed()
+
+        if not self.current_exam:
+            QMessageBox.warning(
+                self,
+                "No Study",
+                "Please select a study first."
+            )
+            return
+
+        self.update_status(
+            f"Study opened: {self.current_exam}"
+        )
+
+        # Load the latest stored video directly.
+        try:
+            media = self.db_manager.get_examination_media(
+                self.current_exam,
+                "video"
+            )
+
+            if not media:
+                return
+
+            latest = media[0]
+            video_path = Path(latest["file_path"])
+
+            if not video_path.exists():
+                QMessageBox.warning(
+                    self,
+                    "Video Not Found",
+                    f"Stored video was not found:\n{video_path}"
+                )
+                return
+
+            self.current_video_path = str(video_path)
+
+            self.display_timer.stop()
+
+            if self.video_player.open_video(str(video_path)):
+                self.video_slider.setMaximum(
+                    max(0, self.video_player.total_frames - 1)
+                )
+                self.video_slider.setValue(0)
+
+                if hasattr(self, "fps_label"):
+                    self.fps_label.setText(
+                        f"FPS: {self.video_player.fps:.1f}"
+                    )
+
+                frame = self.video_player.get_current_frame()
+
+                if frame is not None:
+                    self.display_frame(frame)
+
+                self.update_status(
+                    f"Study video loaded: {video_path.name}"
+                )
+            else:
+                QMessageBox.warning(
+                    self,
+                    "Video Error",
+                    "Could not open the study video."
+                )
+
+        except Exception as e:
+            logger.exception(
+                f"Error opening study video: {e}"
+            )
+            QMessageBox.critical(
+                self,
+                "Open Study Error",
+                f"Could not open study video:\n{e}"
+            )
+
+    def _study_root(self):
+        """Return storage directory for the current study."""
+        if not self.current_patient or not self.current_exam:
+            return None
+
+        root = (
+            self.project_data_dir
+            / "patients"
+            / self.current_patient
+            / "studies"
+            / self.current_exam
+        )
+
+        root.mkdir(parents=True, exist_ok=True)
+        (root / "videos").mkdir(exist_ok=True)
+        (root / "images").mkdir(exist_ok=True)
+        (root / "reports").mkdir(exist_ok=True)
+
+        return root
+
+    def save_current_video_to_study(self):
+        """Copy the currently loaded video into the active study."""
+
+        if not self.current_exam:
+            QMessageBox.warning(
+                self,
+                "No Study",
+                "Please create or select a study first."
+            )
+            return
+
+        if not self.current_video_path:
+            QMessageBox.warning(
+                self,
+                "No Video",
+                "Please load a recorded ultrasound video first."
+            )
+            return
+
+        source = Path(self.current_video_path)
+
+        if not source.exists():
+            QMessageBox.warning(
+                self,
+                "Video Not Found",
+                "The selected video file no longer exists."
+            )
+            return
+
+        study_root = self._study_root()
+
+        if study_root is None:
+            return
+
+        destination = (
+            study_root
+            / "videos"
+            / source.name
+        )
+
+        try:
+            # Avoid copying a file onto itself.
+            if source.resolve() != destination.resolve():
+                shutil.copy2(
+                    str(source),
+                    str(destination)
+                )
+
+            media_id = (
+                f"M{uuid.uuid4().hex[:10].upper()}"
+            )
+
+            relative_path = str(
+                destination.as_posix()
+            )
+
+            if not self.db_manager.add_examination_media(
+                media_id,
+                self.current_exam,
+                "video",
+                relative_path
+            ):
+                QMessageBox.warning(
+                    self,
+                    "Database Error",
+                    "Video was copied but could not be "
+                    "registered in the database."
+                )
+                return
+
+            self.update_status(
+                f"Video saved to study {self.current_exam}"
+            )
+
+            QMessageBox.information(
+                self,
+                "Video Saved",
+                f"Video saved successfully to study "
+                f"{self.current_exam}."
+            )
+
+        except Exception as e:
+            logger.exception(
+                f"Error saving video to study: {e}"
+            )
+            QMessageBox.critical(
+                self,
+                "Save Error",
+                f"Could not save video:\n{e}"
+            )
+
     def browse_video(self):
         """Browse for and load a recorded ultrasound video."""
         file_path, _ = QFileDialog.getOpenFileName(
@@ -940,6 +1303,10 @@ class MainWindowV1(QMainWindow):
             return
 
         try:
+            # Remember the original video source so it can
+            # later be attached to the active study.
+            self.current_video_path = file_path
+
             # Stop any currently running playback.
             self.display_timer.stop()
 
@@ -1230,46 +1597,74 @@ class MainWindowV1(QMainWindow):
                 )
 
     def new_examination(self):
-        """Create new examination."""
+        """Create a new ultrasound study for the current patient."""
 
         if not self.current_patient:
             QMessageBox.warning(
                 self,
-                "Error",
-                "Please select or create a patient first"
+                "No Patient",
+                "Please select or create a patient first."
             )
             return
 
-        exam_id = (
-            f"E{uuid.uuid4().hex[:8].upper()}"
-        )
+        exam_id = f"E{uuid.uuid4().hex[:8].upper()}"
+        now = datetime.now()
 
         exam = Examination(
             exam_id=exam_id,
             patient_id=self.current_patient,
             exam_type="abdominal",
-            exam_date=datetime.now().isoformat(),
+            exam_date=now.isoformat(),
             modality="ultrasound",
             indication="General ultrasound examination",
             findings="",
             status="in_progress"
         )
 
-        if self.db_manager.add_examination(
-            exam
-        ):
-            self.current_exam = exam_id
-
-            self.update_status(
-                f"Examination {exam_id} created"
-            )
-
-        else:
+        if not self.db_manager.add_examination(exam):
             QMessageBox.warning(
                 self,
                 "Error",
-                "Failed to create examination"
+                "Failed to create study."
             )
+            return
+
+        self.current_exam = exam_id
+
+        # Create physical study storage.
+        study_root = (
+            self.project_data_dir
+            / "patients"
+            / self.current_patient
+            / "studies"
+            / exam_id
+        )
+
+        for folder in (
+            study_root,
+            study_root / "videos",
+            study_root / "images",
+            study_root / "reports"
+        ):
+            folder.mkdir(parents=True, exist_ok=True)
+
+        self.current_study_label.setText(
+            f"Study: {exam_id}\n"
+            f"Patient: {self.current_patient}\n"
+            f"Date: {now.strftime('%Y-%m-%d %H:%M:%S')}"
+        )
+
+        self.refresh_study_history()
+
+        self.update_status(
+            f"Study {exam_id} created"
+        )
+
+        QMessageBox.information(
+            self,
+            "Study Created",
+            f"New ultrasound study created:\n\n{exam_id}"
+        )
 
     def refresh_patients_list(self):
         """Refresh patient list table."""
