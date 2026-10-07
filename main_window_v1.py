@@ -47,22 +47,9 @@ class FrameDisplayWidget(QWidget):
     
     def paintEvent(self, event):
         """Paint the frame"""
-        from PySide6.QtGui import QPainter
-        
-        painter = QPainter(self)
-        
         if self.image:
-            # Draw the pixmap to fill the widget
-            painter.drawPixmap(
-                self.rect(),  # Target rectangle (full widget)
-                self.image,   # Source pixmap
-                self.image.rect()  # Source rectangle
-            )
-        else:
-            # Draw black background
-            painter.fillRect(self.rect(), self.palette().color(self.backgroundRole()))
-        
-        painter.end()
+            painter = self.image.painter(self)
+            painter.drawImage(0, 0, self.image)
 
 
 class PatientManagementDialog(QDialog):
@@ -216,6 +203,12 @@ class MainWindowV1(QMainWindow):
         self.setWindowTitle("AI Ultrasound Assistant - V1.0")
         self.setGeometry(100, 100, 1400, 900)
         
+        # Setup status bar FIRST
+        self.statusBar = QStatusBar()
+        self.setStatusBar(self.statusBar)
+        self.status_label = QLabel("Ready")
+        self.statusBar.addWidget(self.status_label)
+
         # Initialize components
         self.device_manager = DeviceManager()
         self.capture_manager = None
@@ -230,17 +223,6 @@ class MainWindowV1(QMainWindow):
         self.current_frame_id = 0
         self.is_capturing = False
         
-        # Setup status bar FIRST (before anything else that might use it)
-        self.statusBar = QStatusBar()
-        self.setStatusBar(self.statusBar)
-        self.status_label = QLabel("Ready")
-        self.statusBar.addWidget(self.status_label)
-        
-        # Create shared UI components BEFORE setup_ui
-        self.frame_display = FrameDisplayWidget()
-        self.frame_info_label = QLabel("Ready")
-        self.fps_label = QLabel("FPS: 0")
-        
         # Setup UI
         self.setup_ui()
         self.load_devices()
@@ -249,6 +231,12 @@ class MainWindowV1(QMainWindow):
         self.display_timer = QTimer()
         self.display_timer.timeout.connect(self.update_display)
         self.display_timer.setInterval(33)  # ~30 FPS
+        
+        # Setup status bar
+        self.statusBar = QStatusBar()
+        self.setStatusBar(self.statusBar)
+        self.status_label = QLabel("Ready")
+        self.statusBar.addWidget(self.status_label)
     
     def setup_ui(self):
         """Setup the main UI"""
@@ -292,12 +280,16 @@ class MainWindowV1(QMainWindow):
         # Right panel - Video display
         right_panel = QVBoxLayout()
         
-        # Frame display (created in __init__)
+        # Frame display
+        self.frame_display = FrameDisplayWidget()
         right_panel.addWidget(self.frame_display)
         
-        # Frame info (created in __init__)
+        # Frame info
         info_layout = QHBoxLayout()
+        self.frame_info_label = QLabel("Ready")
         info_layout.addWidget(self.frame_info_label)
+        
+        self.fps_label = QLabel("FPS: 0")
         info_layout.addWidget(self.fps_label)
         
         right_panel.addLayout(info_layout)
@@ -390,25 +382,20 @@ class MainWindowV1(QMainWindow):
         file_layout.addWidget(browse_btn)
         layout.addLayout(file_layout)
         
-        # Video display
-        layout.addWidget(QLabel("Video:"))
-        layout.addWidget(self.frame_display)
-        layout.addWidget(self.frame_info_label)
-        
         # Playback controls
         control_layout = QHBoxLayout()
         
-        self.play_btn = QPushButton("▶ Play")
+        self.play_btn = QPushButton("Play")
         self.play_btn.clicked.connect(self.play_video)
         self.play_btn.setEnabled(False)
         control_layout.addWidget(self.play_btn)
         
-        self.pause_btn = QPushButton("⏸ Pause")
+        self.pause_btn = QPushButton("Pause")
         self.pause_btn.clicked.connect(self.pause_video)
         self.pause_btn.setEnabled(False)
         control_layout.addWidget(self.pause_btn)
         
-        self.stop_btn = QPushButton("⏹ Stop")
+        self.stop_btn = QPushButton("Stop")
         self.stop_btn.clicked.connect(self.stop_video)
         self.stop_btn.setEnabled(False)
         control_layout.addWidget(self.stop_btn)
@@ -418,18 +405,11 @@ class MainWindowV1(QMainWindow):
         # Progress slider
         layout.addWidget(QLabel("Progress:"))
         self.video_slider = QSlider(Qt.Horizontal)
-        self.video_slider.setMinimum(0)
-        self.video_slider.setMaximum(100)
-        self.video_slider.sliderMoved.connect(self.on_slider_moved)
-        self.video_slider.setEnabled(False)
         layout.addWidget(self.video_slider)
         
-        # Frame capture
-        capture_layout = QHBoxLayout()
-        capture_frame_btn = QPushButton("📸 Capture Frame & Analyze")
-        capture_frame_btn.clicked.connect(self.capture_from_video)
-        capture_layout.addWidget(capture_frame_btn)
-        layout.addLayout(capture_layout)
+        # Frame info
+        self.video_info = QLabel("No video loaded")
+        layout.addWidget(self.video_info)
         
         layout.addStretch()
         widget.setLayout(layout)
@@ -557,11 +537,7 @@ class MainWindowV1(QMainWindow):
     def load_devices(self):
         """Load available capture devices"""
         self.device_combo.clear()
-        try:
-            devices = self.device_manager.enumerate_devices()
-        except Exception as e:
-            logger.warning(f"Error enumerating devices: {e}")
-            devices = []
+        devices = self.device_manager.enumerate_devices()
         
         for device in devices:
             self.device_combo.addItem(f"{device.name} ({device.index})", device)
@@ -663,19 +639,10 @@ class MainWindowV1(QMainWindow):
         )
         
         if file_path:
-            if self.video_player.open_video(file_path):
-                self.video_path_label.setText(os.path.basename(file_path))
-                self.play_btn.setEnabled(True)
-                self.video_slider.setEnabled(True)
-                info = self.video_player.get_info()
-                self.frame_info_label.setText(
-                    f"Video: {info['total_frames']} frames @ {info['fps']:.1f} FPS | "
-                    f"Size: {info['width']}x{info['height']}"
-                )
-                self.update_status(f"Video loaded: {os.path.basename(file_path)}")
-            else:
-                QMessageBox.critical(self, "Error", f"Failed to open video: {os.path.basename(file_path)}")
-                self.update_status("Failed to load video")
+            self.video_player.open_video(file_path)
+            self.video_path_label.setText(os.path.basename(file_path))
+            self.play_btn.setEnabled(True)
+            self.update_status(f"Video loaded: {os.path.basename(file_path)}")
     
     def play_video(self):
         """Play video"""
@@ -698,72 +665,6 @@ class MainWindowV1(QMainWindow):
         self.pause_btn.setEnabled(False)
         self.stop_btn.setEnabled(False)
         self.update_status("Video stopped")
-    
-    def on_slider_moved(self, value):
-        """Handle slider position change"""
-        if hasattr(self, 'video_player') and self.video_player.cap:
-            frame_num = int((value / 100.0) * self.video_player.total_frames)
-            self.video_player.seek(frame_num)
-            frame = self.video_player.get_frame_at(frame_num)
-            if frame is not None:
-                self.display_frame(frame)
-    
-    def capture_from_video(self):
-        """Capture current frame from video and analyze with AI"""
-        if not hasattr(self, 'video_player') or self.video_player.current_frame is None:
-            QMessageBox.warning(self, "Warning", "Please load and play a video first!")
-            return
-        
-        frame = self.video_player.current_frame
-        if frame is None:
-            QMessageBox.warning(self, "Warning", "No frame available!")
-            return
-        
-        frame_id = f"V{uuid.uuid4().hex[:8]}"
-        
-        try:
-            # Make sure captures directory exists
-            import os
-            os.makedirs("captures", exist_ok=True)
-            
-            # Analyze with AI
-            self.update_status(f"Analyzing frame {frame_id}...")
-            logger.info(f"Starting AI analysis for frame {frame_id}")
-            
-            result = self.ai_engine.analyze_abdominal_ultrasound(frame, frame_id)
-            
-            logger.info(f"AI analysis complete: {len(result.detected_organs)} organs detected")
-            logger.info(f"Quality: {result.quality_assessment.overall_score:.1f}, Score: {result.frame_score:.1f}")
-            
-            # Save frame
-            frame_path = f"captures/{frame_id}.jpg"
-            cv2.imwrite(frame_path, frame)
-            logger.info(f"Frame saved to {frame_path}")
-            
-            # Display results
-            self.display_ai_results(result)
-            
-            # Save to database
-            if hasattr(self, 'current_patient_id') and hasattr(self, 'current_exam_id'):
-                self.db_manager.add_captured_frame(
-                    frame_id, self.current_exam_id, frame_path, result.quality_assessment.overall_score
-                )
-                self.db_manager.add_ai_analysis(
-                    f"A{uuid.uuid4().hex[:8]}", frame_id, self.current_exam_id,
-                    [o.organ_name for o in result.detected_organs],
-                    result.quality_assessment.overall_score,
-                    result.frame_score,
-                    result.processing_time_ms,
-                    result.models_used,
-                    result.is_best_frame
-                )
-                logger.info("Results saved to database")
-            
-            self.update_status(f"Frame {frame_id} captured and analyzed!")
-            
-        except Exception as e:
-            logger.error(f"Error capturing frame: {e}", exc_info=True)
-            QMessageBox.critical(self, "Error", f"Failed to capture/analyze frame: {e}")
     
     def new_patient(self):
         """Create new patient"""
@@ -835,33 +736,8 @@ class MainWindowV1(QMainWindow):
         QMessageBox.information(self, "Settings", "Settings saved successfully")
     
     def update_display(self):
-        """Update display with latest frame (from capture or video)"""
-        frame = None
-        
-        # Priority: Video playback over capture
-        if hasattr(self, 'video_player') and self.video_player.is_playing:
-            frame = self.video_player.get_current_frame()
-            if frame is not None:
-                try:
-                    self.display_frame(frame)
-                    # Update slider position
-                    if hasattr(self, 'video_slider') and self.video_player.total_frames > 0:
-                        self.video_slider.blockSignals(True)
-                        slider_value = int((self.video_player.current_frame_num / self.video_player.total_frames) * 100)
-                        self.video_slider.setValue(min(100, max(0, slider_value)))
-                        self.video_slider.blockSignals(False)
-                    # Update frame info
-                    info = self.video_player.get_info()
-                    self.frame_info_label.setText(
-                        f"Frame: {info['current_frame']}/{info['total_frames']} | "
-                        f"Size: {info['width']}x{info['height']} | "
-                        f"FPS: {info['fps']:.1f}"
-                    )
-                except Exception as e:
-                    logger.error(f"Error updating display: {e}")
-        
-        # Fallback to live capture
-        elif self.is_capturing and self.capture_manager:
+        """Update display with latest frame"""
+        if self.is_capturing and self.capture_manager:
             frame = self.capture_manager.get_latest_frame()
             if frame is not None:
                 self.display_frame(frame)
@@ -883,35 +759,6 @@ class MainWindowV1(QMainWindow):
         
         self.frame_info_label.setText(f"Size: {w}x{h}")
     
-    def display_ai_results(self, result):
-        """Display AI analysis results using AIAnalysisWidget"""
-        try:
-            logger.info(f"Displaying AI results...")
-            logger.info(f"  Organs detected: {len(result.detected_organs)}")
-            logger.info(f"  Quality score: {result.quality_assessment.overall_score:.1f}")
-            logger.info(f"  Frame score: {result.frame_score:.1f}")
-            
-            # Use analysis_tab to display results
-            if hasattr(self, 'analysis_tab'):
-                self.analysis_tab.update_analysis(result)
-                logger.info(f"Analysis widget updated with {len(result.detected_organs)} organs")
-            else:
-                logger.error("Analysis tab not found!")
-                return
-            
-            # Switch to AI Analysis tab
-            if hasattr(self, 'tabs'):
-                for i in range(self.tabs.count()):
-                    if self.tabs.tabText(i) == "AI Analysis":
-                        self.tabs.setCurrentIndex(i)
-                        logger.info("Switched to AI Analysis tab")
-                        break
-            
-            logger.info(f"Results displayed successfully!")
-            
-        except Exception as e:
-            logger.error(f"Error displaying results: {e}", exc_info=True)
-    
     def update_status(self, message: str):
         """Update status bar"""
         self.status_label.setText(message)
@@ -924,11 +771,16 @@ class MainWindowV1(QMainWindow):
         self.db_manager.close()
         event.accept()
 
-
 if __name__ == "__main__":
+    from PySide6.QtWidgets import QApplication
     from app.config import AppConfig
+    import sys
+    import logging
+    
     logging.basicConfig(level=logging.INFO)
     
+    app = QApplication(sys.argv)
     config = AppConfig()
     window = MainWindowV1(config)
     window.show()
+    sys.exit(app.exec())
