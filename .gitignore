@@ -27,3 +27,6 @@ ultrasound.db
 *.suo
 Thumbs.db
 .DS_Store
+*.zip
+main_window_v1_backup*.py
+*_backup*.py
