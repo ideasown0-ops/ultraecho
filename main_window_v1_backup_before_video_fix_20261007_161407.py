@@ -1,4 +1,5 @@
-﻿"""
+```python
+"""
 Main Window V1.0
 Enhanced UI with AI Analysis, Database, and Advanced Features
 """
@@ -16,11 +17,11 @@ from PySide6.QtWidgets import (
     QCheckBox, QSlider, QDialog, QFormLayout, QLineEdit,
     QStatusBar
 )
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, QTimer, QDialog
 from PySide6.QtGui import QPixmap, QImage, QPainter
 
 import cv2
-import numpy as np
+
 from app.config import AppConfig
 from app.video.device_manager import DeviceManager, VideoDevice
 from app.video.capture_manager import CaptureManager
@@ -520,7 +521,6 @@ class MainWindowV1(QMainWindow):
         layout.addWidget(QLabel("Progress:"))
 
         self.video_slider = QSlider(Qt.Horizontal)
-        self.video_slider.valueChanged.connect(self.seek_video)
         self.video_slider.setRange(0, 0)
         self.video_slider.setEnabled(False)
         self.video_slider.sliderMoved.connect(
@@ -928,183 +928,163 @@ class MainWindowV1(QMainWindow):
         )
 
     def browse_video(self):
-        """Browse for and load a recorded ultrasound video."""
+        """Browse and open a recorded video."""
+
         file_path, _ = QFileDialog.getOpenFileName(
             self,
             "Select Video File",
             "",
-            "Video Files (*.mp4 *.avi *.mkv *.mov *.wmv *.m4v);;All Files (*)"
+            (
+                "Video Files "
+                "(*.mp4 *.avi *.mkv *.mov *.wmv *.m4v);;"
+                "All Files (*)"
+            )
         )
 
         if not file_path:
             return
 
-        try:
-            # Stop any currently running playback.
-            self.display_timer.stop()
+        # Stop live capture if active.
+        if self.is_capturing:
+            self.stop_capture()
 
-            if self.video_player:
-                self.video_player.pause()
+        # Stop any previous video playback.
+        self.display_timer.stop()
+        self.video_player.close()
 
-            # Open the selected file.
-            opened = self.video_player.open_video(file_path)
+        success = self.video_player.open_video(
+            file_path
+        )
 
-            if not opened:
-                QMessageBox.critical(
-                    self,
-                    "Video Error",
-                    f"Failed to open video:\n{file_path}"
-                )
-                self.update_status("Failed to open video")
-                return
+        if not success:
+            self.video_path_label.setText(
+                "No video selected"
+            )
 
-            info = self.video_player.get_info()
-
-            # Update UI.
-            self.video_path_label.setText(os.path.basename(file_path))
-            self.video_path_label.setToolTip(file_path)
-
-            self.play_btn.setEnabled(True)
+            self.play_btn.setEnabled(False)
             self.pause_btn.setEnabled(False)
             self.stop_btn.setEnabled(False)
+            self.video_slider.setEnabled(False)
 
-            total_frames = max(1, int(info["total_frames"]))
-            self.video_slider.blockSignals(True)
-            self.video_slider.setMinimum(0)
-            self.video_slider.setMaximum(total_frames - 1)
-            self.video_slider.setValue(0)
-            self.video_slider.blockSignals(False)
-
-            self.video_info.setText(
-                f"Frame: 0/{info['total_frames']} | "
-                f"{info['width']}x{info['height']} | "
-                f"{info['fps']:.2f} FPS | "
-                f"Duration: {info['duration_sec']:.1f}s"
-            )
-
-            # Show the first frame immediately.
-            first_frame = self.video_player.get_frame_at(0)
-
-            if first_frame is not None:
-                self.display_frame(first_frame)
-                self.frame_info_label.setText(
-                    f"Recorded video: {info['width']}x{info['height']}"
-                )
-            else:
-                logger.warning("Video opened but first frame could not be read")
-
-            # Use the video's actual FPS.
-            fps = float(info.get("fps", 30.0) or 30.0)
-            if fps <= 0:
-                fps = 30.0
-
-            interval = max(1, int(round(1000.0 / fps)))
-            self.display_timer.setInterval(interval)
-
-            self.update_status(
-                f"Video loaded: {os.path.basename(file_path)} "
-                f"({info['total_frames']} frames, {fps:.2f} FPS)"
-            )
-
-        except Exception as e:
-            logger.exception("Error loading recorded video")
             QMessageBox.critical(
                 self,
                 "Video Error",
-                f"Error loading video:\n{e}"
+                "Failed to open the selected video."
             )
-            self.update_status("Video loading failed")
+
+            return
+
+        info = self.video_player.get_info()
+
+        self.video_path_label.setText(
+            os.path.basename(file_path)
+        )
+
+        self.play_btn.setEnabled(True)
+        self.pause_btn.setEnabled(False)
+        self.stop_btn.setEnabled(False)
+
+        self.video_slider.setRange(
+            0,
+            max(0, info["total_frames"] - 1)
+        )
+        self.video_slider.setValue(0)
+        self.video_slider.setEnabled(
+            info["total_frames"] > 1
+        )
+
+        self.video_info.setText(
+            self.format_video_info(info)
+        )
+
+        self.fps_label.setText(
+            f"FPS: {info['fps']:.1f}"
+        )
+
+        # Read and display first frame immediately.
+        first_frame = self.video_player.get_frame_at(0)
+
+        if first_frame is not None:
+            self.display_frame(
+                first_frame
+            )
+
+        self.update_status(
+            f"Video loaded: {os.path.basename(file_path)}"
+        )
 
     def play_video(self):
-        """Start recorded video playback."""
-        try:
-            if not self.video_player or not self.video_player.cap:
-                QMessageBox.warning(
-                    self,
-                    "No Video",
-                    "Please select a video first."
-                )
-                return
+        """Play recorded video."""
 
-            info = self.video_player.get_info()
+        if not self.video_player.cap:
+            return
 
-            fps = float(info.get("fps", 30.0) or 30.0)
-            if fps <= 0:
-                fps = 30.0
+        self.video_player.play()
 
+        self.play_btn.setEnabled(False)
+        self.pause_btn.setEnabled(True)
+        self.stop_btn.setEnabled(True)
+
+        # Timer interval based on actual video FPS.
+        fps = self.video_player.fps
+
+        if fps and fps > 0:
+            interval = max(
+                1,
+                int(1000 / fps)
+            )
             self.display_timer.setInterval(
-                max(1, int(round(1000.0 / fps)))
+                interval
             )
+        else:
+            self.display_timer.setInterval(33)
 
-            self.video_player.play()
+        self.display_timer.start()
 
-            self.play_btn.setEnabled(False)
-            self.pause_btn.setEnabled(True)
-            self.stop_btn.setEnabled(True)
-
-            self.display_timer.start()
-
-            self.update_status("Playing recorded video")
-
-        except Exception as e:
-            logger.exception("Error starting video playback")
-            QMessageBox.critical(
-                self,
-                "Playback Error",
-                f"Error starting playback:\n{e}"
-            )
+        self.update_status(
+            "Playing video"
+        )
 
     def pause_video(self):
-        """Pause recorded video playback."""
-        try:
-            if self.video_player:
-                self.video_player.pause()
+        """Pause recorded video."""
 
-            self.display_timer.stop()
+        self.video_player.pause()
 
-            self.play_btn.setEnabled(True)
-            self.pause_btn.setEnabled(False)
-            self.stop_btn.setEnabled(True)
+        self.display_timer.stop()
 
-            self.update_status("Video paused")
+        self.play_btn.setEnabled(True)
+        self.pause_btn.setEnabled(False)
+        self.stop_btn.setEnabled(True)
 
-        except Exception as e:
-            logger.exception("Error pausing video")
+        self.update_video_ui()
+
+        self.update_status(
+            "Video paused"
+        )
 
     def stop_video(self):
         """Stop recorded video and return to first frame."""
-        try:
-            self.display_timer.stop()
 
-            if self.video_player:
-                self.video_player.stop()
+        self.video_player.stop()
 
-                frame = self.video_player.get_frame_at(0)
+        self.display_timer.stop()
 
-                if frame is not None:
-                    self.display_frame(frame)
+        self.play_btn.setEnabled(True)
+        self.pause_btn.setEnabled(False)
+        self.stop_btn.setEnabled(False)
 
-                info = self.video_player.get_info()
+        first_frame = self.video_player.get_frame_at(0)
 
-                self.video_slider.blockSignals(True)
-                self.video_slider.setValue(0)
-                self.video_slider.blockSignals(False)
+        if first_frame is not None:
+            self.display_frame(
+                first_frame
+            )
 
-                self.video_info.setText(
-                    f"Frame: 0/{info['total_frames']} | "
-                    f"{info['width']}x{info['height']} | "
-                    f"{info['fps']:.2f} FPS | "
-                    f"Duration: {info['duration_sec']:.1f}s"
-                )
+        self.update_video_ui()
 
-            self.play_btn.setEnabled(True)
-            self.pause_btn.setEnabled(False)
-            self.stop_btn.setEnabled(False)
-
-            self.update_status("Video stopped")
-
-        except Exception as e:
-            logger.exception("Error stopping video")
+        self.update_status(
+            "Video stopped"
+        )
 
     def seek_video(self, frame_num: int):
         """Seek recorded video to a specific frame."""
@@ -1351,126 +1331,106 @@ class MainWindowV1(QMainWindow):
         )
 
     def update_display(self):
-        """
-        Update the main video area.
+        """Update the display for live capture or recorded video."""
 
-        Source priority:
-        1. Recorded video when it is playing.
-        2. Live capture when active.
-        """
+        # Priority 1: live capture.
+        if self.is_capturing and self.capture_manager:
+            frame = (
+                self.capture_manager.get_latest_frame()
+            )
 
-        try:
-            # ------------------------------------------------
-            # Recorded video
-            # ------------------------------------------------
-            if self.video_player and self.video_player.is_playing:
-                frame = self.video_player.get_current_frame()
+            if frame is not None:
+                self.display_frame(frame)
 
-                if frame is not None:
-                    self.display_frame(frame)
-
-                    info = self.video_player.get_info()
-
-                    current_frame = int(info.get("current_frame", 0))
-                    total_frames = int(info.get("total_frames", 0))
-
-                    if total_frames > 0:
-                        self.video_slider.blockSignals(True)
-                        self.video_slider.setMinimum(0)
-                        self.video_slider.setMaximum(
-                            max(0, total_frames - 1)
-                        )
-                        self.video_slider.setValue(
-                            min(current_frame, total_frames - 1)
-                        )
-                        self.video_slider.blockSignals(False)
-
-                    self.video_info.setText(
-                        f"Frame: {current_frame + 1}/{total_frames} | "
-                        f"{info['width']}x{info['height']} | "
-                        f"{info['fps']:.2f} FPS | "
-                        f"Duration: {info['duration_sec']:.1f}s"
+                try:
+                    stats = (
+                        self.capture_manager.get_stats()
                     )
-
-                    self.fps_label.setText(
-                        f"FPS: {info['fps']:.1f}"
-                    )
-
-                else:
-                    # End of recorded video.
-                    self.display_timer.stop()
-
-                    self.play_btn.setEnabled(True)
-                    self.pause_btn.setEnabled(False)
-                    self.stop_btn.setEnabled(True)
-
-                    self.update_status("Video playback finished")
-
-                return
-
-            # ------------------------------------------------
-            # Live capture
-            # ------------------------------------------------
-            if self.is_capturing and self.capture_manager:
-                frame = self.capture_manager.get_latest_frame()
-
-                if frame is not None:
-                    self.display_frame(frame)
-
-                    stats = self.capture_manager.get_stats()
-
                     self.fps_label.setText(
                         f"FPS: {stats.current_fps:.1f}"
                     )
+                except Exception:
+                    pass
 
-        except Exception as e:
-            logger.exception("Error updating video display")
+            return
+
+        # Priority 2: recorded video.
+        if self.video_player.is_playing:
+            frame = (
+                self.video_player.get_current_frame()
+            )
+
+            if frame is not None:
+                self.display_frame(frame)
+                self.update_video_ui()
+
+            else:
+                # Video reached its end.
+                self.video_player.pause()
+                self.display_timer.stop()
+
+                self.play_btn.setEnabled(True)
+                self.pause_btn.setEnabled(False)
+                self.stop_btn.setEnabled(False)
+
+                self.update_video_ui()
+
+                self.update_status(
+                    "Video playback finished"
+                )
 
     def display_frame(self, frame):
-        """Display an OpenCV BGR frame in FrameDisplayWidget."""
+        """Convert OpenCV frame to QPixmap and display it."""
+
+        if frame is None:
+            return
+
         try:
-            if frame is None:
-                return
+            if len(frame.shape) == 2:
+                frame_rgb = cv2.cvtColor(
+                    frame,
+                    cv2.COLOR_GRAY2RGB
+                )
+            else:
+                frame_rgb = cv2.cvtColor(
+                    frame,
+                    cv2.COLOR_BGR2RGB
+                )
 
-            if not isinstance(frame, np.ndarray):
-                logger.warning("display_frame received non-NumPy frame")
-                return
+            frame_rgb = frame_rgb.copy()
 
-            if frame.size == 0:
-                logger.warning("display_frame received empty frame")
-                return
+            h, w, channels = (
+                frame_rgb.shape
+            )
 
-            # OpenCV uses BGR; Qt expects RGB.
-            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            bytes_per_line = (
+                channels * w
+            )
 
-            height, width, channels = frame_rgb.shape
-
-            # Keep the underlying RGB memory alive through QImage.copy().
-            bytes_per_line = channels * width
-
-            qimage = QImage(
+            q_image = QImage(
                 frame_rgb.data,
-                width,
-                height,
+                w,
+                h,
                 bytes_per_line,
                 QImage.Format_RGB888
             ).copy()
 
-            pixmap = QPixmap.fromImage(qimage)
+            pixmap = QPixmap.fromImage(
+                q_image
+            )
 
-            # FrameDisplayWidget is a custom QWidget.
-            # It draws self.image inside paintEvent().
             self.frame_display.image = pixmap
             self.frame_display.update()
 
-            # Update basic frame information.
-            if hasattr(self, "frame_info_label"):
-                self.frame_info_label.setText(
-                    f"Frame: {width}x{height}"
-                )
+            self.frame_info_label.setText(
+                f"Size: {w}x{h}"
+            )
 
         except Exception as e:
-            logger.exception(f"Error displaying video frame: {e}")
+            logger.exception(
+                f"Error displaying frame: {e}"
+            )
+
     def update_status(self, message: str):
         """Update status bar."""
 
@@ -1482,26 +1442,38 @@ class MainWindowV1(QMainWindow):
 
     def closeEvent(self, event):
         """Handle window close."""
-        try:
-            self.display_timer.stop()
 
-            if self.capture_manager:
-                self.capture_manager.stop()
+        self.display_timer.stop()
 
-            if self.video_player:
-                self.video_player.close()
+        if self.capture_manager:
+            self.capture_manager.stop()
 
-            self.db_manager.close()
+        self.video_player.close()
 
-        except Exception as e:
-            logger.exception(
-                f"Error during application shutdown: {e}"
-            )
+        self.db_manager.close()
 
         event.accept()
 
 
+if __name__ == "__main__":
+    from PySide6.QtWidgets import QApplication
+    import sys
 
+    logging.basicConfig(
+        level=logging.INFO
+    )
 
+    app = QApplication(sys.argv)
 
+    config = AppConfig()
 
+    window = MainWindowV1(
+        config
+    )
+
+    window.show()
+
+    sys.exit(
+        app.exec()
+    )
+```

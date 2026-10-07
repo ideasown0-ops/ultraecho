@@ -16,11 +16,11 @@ from PySide6.QtWidgets import (
     QCheckBox, QSlider, QDialog, QFormLayout, QLineEdit,
     QStatusBar
 )
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, QTimer, QDialog
 from PySide6.QtGui import QPixmap, QImage, QPainter
 
 import cv2
-import numpy as np
+
 from app.config import AppConfig
 from app.video.device_manager import DeviceManager, VideoDevice
 from app.video.capture_manager import CaptureManager
@@ -1427,28 +1427,23 @@ class MainWindowV1(QMainWindow):
             logger.exception("Error updating video display")
 
     def display_frame(self, frame):
-        """Display an OpenCV BGR frame in FrameDisplayWidget."""
+        """Display an OpenCV BGR frame inside the main video area."""
+
+        if frame is None:
+            return
+
         try:
-            if frame is None:
-                return
-
-            if not isinstance(frame, np.ndarray):
-                logger.warning("display_frame received non-NumPy frame")
-                return
-
-            if frame.size == 0:
-                logger.warning("display_frame received empty frame")
-                return
-
-            # OpenCV uses BGR; Qt expects RGB.
-            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            # OpenCV BGR -> Qt RGB
+            frame_rgb = cv2.cvtColor(
+                frame,
+                cv2.COLOR_BGR2RGB
+            )
 
             height, width, channels = frame_rgb.shape
 
-            # Keep the underlying RGB memory alive through QImage.copy().
             bytes_per_line = channels * width
 
-            qimage = QImage(
+            image = QImage(
                 frame_rgb.data,
                 width,
                 height,
@@ -1456,21 +1451,42 @@ class MainWindowV1(QMainWindow):
                 QImage.Format_RGB888
             ).copy()
 
-            pixmap = QPixmap.fromImage(qimage)
+            pixmap = QPixmap.fromImage(image)
 
-            # FrameDisplayWidget is a custom QWidget.
-            # It draws self.image inside paintEvent().
-            self.frame_display.image = pixmap
-            self.frame_display.update()
+            # FrameDisplayWidget is expected to behave like a QLabel.
+            # If it has a custom display method, use it.
+            if hasattr(self.frame_display, "setPixmap"):
+                target_size = self.frame_display.size()
 
-            # Update basic frame information.
-            if hasattr(self, "frame_info_label"):
-                self.frame_info_label.setText(
-                    f"Frame: {width}x{height}"
+                if target_size.width() > 0 and target_size.height() > 0:
+                    pixmap = pixmap.scaled(
+                        target_size,
+                        Qt.KeepAspectRatio,
+                        Qt.SmoothTransformation
+                    )
+
+                self.frame_display.setPixmap(pixmap)
+
+            elif hasattr(self.frame_display, "display_frame"):
+                self.frame_display.display_frame(frame)
+
+            elif hasattr(self.frame_display, "set_image"):
+                self.frame_display.set_image(image)
+
+            else:
+                raise RuntimeError(
+                    "FrameDisplayWidget has no supported frame display method"
                 )
 
+            self.frame_info_label.setText(
+                f"Video: {width}x{height}"
+            )
+
         except Exception as e:
-            logger.exception(f"Error displaying video frame: {e}")
+            logger.exception(
+                f"Error displaying video frame: {e}"
+            )
+
     def update_status(self, message: str):
         """Update status bar."""
 
@@ -1499,9 +1515,6 @@ class MainWindowV1(QMainWindow):
             )
 
         event.accept()
-
-
-
 
 
 

@@ -1,0 +1,25 @@
+{
+  "window": {
+    "width": 1400,
+    "height": 900,
+    "maximized": false
+  },
+  "video": {
+    "capture_device_id": -1,
+    "default_resolution": "640x480",
+    "target_fps": 30,
+    "show_fps": true
+  },
+  "ai": {
+    "backend": "cpu",
+    "enable_gpu": true
+  },
+  "paths": {
+    "captures_dir": "captures",
+    "videos_dir": "videos",
+    "models_dir": "models"
+  },
+  "logging": {
+    "level": "INFO"
+  }
+}

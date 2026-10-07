@@ -20,7 +20,7 @@ from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QPixmap, QImage, QPainter
 
 import cv2
-import numpy as np
+
 from app.config import AppConfig
 from app.video.device_manager import DeviceManager, VideoDevice
 from app.video.capture_manager import CaptureManager
@@ -1499,7 +1499,6 @@ class MainWindowV1(QMainWindow):
             )
 
         event.accept()
-
 
 
 
